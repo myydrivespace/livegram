@@ -1,1 +1,1 @@
-worker: python kyc.py
+worker: python main.py
