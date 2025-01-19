@@ -109,7 +109,7 @@ async def handle_user_message(client, message: Message):
 
     if message.text == "Admin Support":
         user_collection.update_one({"_id": user_id}, {"$set": {"active_option": "admin_support"}})
-        await message.reply("Thank you for contacting us! We’ve received your message and will get back to you as soon as possible ")
+        await message.reply("Send us your query, and we’ll get back to you as soon as possible")
     elif message.text == "Sponsorship":
         user_collection.update_one({"_id": user_id}, {"$set": {"active_option": "sponsorship"}})
         await message.reply("Thank you for reaching out! Please share your sponsorship details")
