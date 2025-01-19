@@ -1,3 +1,6 @@
+import logging
+logging.basicConfig(level=logging.INFO)
+
 from pyrogram import Client, filters
 from pyrogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from pymongo import MongoClient
@@ -31,14 +34,16 @@ async def start(client, message: Message):
     user_id = message.from_user.id
     user_name = message.from_user.first_name or "Unknown"
 
-    # Add or update user in the database
+    if user_id == ADMIN_ID:
+        await message.reply("Welcome, Admin! You have access to admin commands. Use /broadcast to send messages to users.")
+        return
+
     user_collection.update_one(
         {"_id": user_id},
         {"$set": {"name": user_name, "active_option": None}},
         upsert=True
     )
 
-    # Create the reply keyboard
     reply_markup = ReplyKeyboardMarkup(
         [
             [
@@ -47,64 +52,11 @@ async def start(client, message: Message):
                 KeyboardButton("Report Scam")
             ],
         ],
-        resize_keyboard=True,  # Adjust button size
-        one_time_keyboard=False  # Keep the keyboard persistent
+        resize_keyboard=True,
+        one_time_keyboard=False
     )
     await message.reply("Welcome! Choose an option below:", reply_markup=reply_markup)
 
-@app.on_message(filters.private & ~filters.bot & ~filters.command("broadcast"))
-async def handle_user_message(client, message: Message):
-    if message.from_user.id == ADMIN_ID:
-        return
-
-    user_id = message.from_user.id
-    user = user_collection.find_one({"_id": user_id})
-    if not user:
-        await message.reply("Please use /start to begin.")
-        return
-
-    if message.text == "Admin Support":
-        # Activate Admin Support and deactivate others
-        user_collection.update_one({"_id": user_id}, {"$set": {"active_option": "admin_support"}})
-        await message.reply("Admin Support enabled! Send me a message, and I will forward it to the admin.")
-    elif message.text == "Sponsorship":
-        # Activate Sponsorship and deactivate others
-        user_collection.update_one({"_id": user_id}, {"$set": {"active_option": "sponsorship"}})
-        await message.reply("Sponsorship option enabled! Send me a message, and I will forward it to the admin.")
-    elif message.text == "Report Scam":
-        # Activate Report Scam and deactivate others
-        user_collection.update_one({"_id": user_id}, {"$set": {"active_option": "report_scam"}})
-        await message.reply("Report Scam option enabled! Send me a message, and I will forward it to the admin.")
-    else:
-        # Check the active option for the user
-        active_option = user.get("active_option")
-        if active_option:
-            extra_message = ""
-            if active_option == "admin_support":
-                extra_message = f"#Admin_Support\nMessage From: {message.from_user.first_name or 'Unknown'}\nUser Id: {user_id}"
-            elif active_option == "sponsorship":
-                extra_message = f"#Sponsorship\nMessage From: {message.from_user.first_name or 'Unknown'}\nUser Id: {user_id}"
-            elif active_option == "report_scam":
-                extra_message = f"#ReportScam\nMessage From: {message.from_user.first_name or 'Unknown'}\nUser Id: {user_id}"
-
-            # Forward the original message to the group
-            forwarded_message = await client.forward_messages(
-                chat_id=GROUP_CHAT_ID,
-                from_chat_id=message.chat.id,
-                message_ids=message.id
-            )
-
-            # Store the mapping in the database
-            message_mapping_collection.insert_one({
-                "forwarded_message_id": forwarded_message.id,
-                "original_user_id": user_id
-            })
-
-            # Send the extra message to the group
-            if extra_message:
-                await client.send_message(chat_id=GROUP_CHAT_ID, text=extra_message)
-        else:
-            await message.reply("Please select an option (Admin Support, Sponsorship, or Report Scam) from the menu to get started.")
 
 @app.on_message(filters.command("broadcast") & filters.user(ADMIN_ID))
 async def broadcast_message(client, message: Message):
@@ -115,9 +67,15 @@ async def broadcast_message(client, message: Message):
     success_count = 0
     failure_count = 0
 
-    # Broadcast the replied-to message using copy_message
     broadcast_message_id = message.reply_to_message.id
-    for user in user_collection.find():
+
+    users = user_collection.find()
+
+    if not users:
+        await message.reply("No users found to broadcast the message.")
+        return
+
+    for user in users:
         user_id = user["_id"]
         try:
             await client.copy_message(
@@ -130,8 +88,60 @@ async def broadcast_message(client, message: Message):
             print(f"Failed to send message to {user_id}: {e}")
             failure_count += 1
 
-    # Acknowledge the admin about the broadcast result
     await message.reply(f"Broadcast completed: {success_count} successes, {failure_count} failures.")
+
+
+@app.on_message(filters.private & ~filters.bot)
+async def handle_user_message(client, message: Message):
+    user_id = message.from_user.id
+
+    if user_id == ADMIN_ID and message.text in ["Admin Support", "Sponsorship", "Report Scam"]:
+        await message.reply("You are the admin. These menu options are for users only.")
+        return
+
+    if user_id == ADMIN_ID:
+        return
+
+    user = user_collection.find_one({"_id": user_id})
+    if not user:
+        await message.reply("Please use /start to begin.")
+        return
+
+    if message.text == "Admin Support":
+        user_collection.update_one({"_id": user_id}, {"$set": {"active_option": "admin_support"}})
+        await message.reply("Thank you for contacting us! We’ve received your message and will get back to you as soon as possible ")
+    elif message.text == "Sponsorship":
+        user_collection.update_one({"_id": user_id}, {"$set": {"active_option": "sponsorship"}})
+        await message.reply("Thank you for reaching out! Please share your sponsorship details")
+    elif message.text == "Report Scam":
+        user_collection.update_one({"_id": user_id}, {"$set": {"active_option": "report_scam"}})
+        await message.reply("Please provide all the necessary details and proof of the scam, such as screenshots, payment receipts, or chat history. This will help us review the matter and take appropriate action")
+    else:
+        active_option = user.get("active_option")
+        thread_id = None
+
+        if active_option == "admin_support":
+            thread_id = 48
+        elif active_option == "sponsorship":
+            thread_id = 45
+        elif active_option == "report_scam":
+            thread_id = 46
+        
+        if thread_id:
+            forwarded_message = await client.forward_messages(
+                chat_id=GROUP_CHAT_ID,
+                from_chat_id=message.chat.id,
+                message_thread_id=thread_id,
+                message_ids=message.id
+            )
+
+            message_mapping_collection.insert_one({
+                "forwarded_message_id": forwarded_message.id,
+                "original_user_id": user_id
+            })
+        else:
+            await message.reply("Please select an option (Admin Support, Sponsorship, or Report Scam) from the menu to get started.")
+
 
 @app.on_message(filters.chat(GROUP_CHAT_ID) & filters.reply)
 async def forward_reply_to_user(client, message: Message):
